@@ -62,6 +62,9 @@ if (os.platform() !== 'win32') {
 
   if (!CONPTY_SUPPORTED_ARCH.includes(windowsArch)) {
     console.log(`  SKIPPED (unsupported architecture ${windowsArch})`);
+  } else if (!fs.existsSync(CONPTY_DIR)) {
+    // The published package leaves third_party out, its prebuilds carry conpty.dll themselves
+    console.log('  SKIPPED (third_party not included)');
   } else {
     const versionFolder = fs.readdirSync(CONPTY_DIR)[0];
     console.log(`  Found version ${versionFolder}`);

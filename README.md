@@ -1,5 +1,7 @@
 # node-pty
 
+> **@seydx/node-pty** is a fork of [microsoft/node-pty](https://github.com/microsoft/node-pty) that ships prebuilt binaries for every supported platform inside the npm package: macOS (x64, arm64), Windows (x64, arm64) and Linux (x64, arm64) for both glibc and musl (e.g. Alpine). The binaries use N-API, so they work with every Node.js and Electron version without a rebuild or build tools. Install it with `npm install @seydx/node-pty` and import from `@seydx/node-pty`.
+
 [![Build Status](https://dev.azure.com/vscode/node-pty/_apis/build/status/Microsoft.node-pty?branchName=main)](https://dev.azure.com/vscode/node-pty/_build/latest?definitionId=11&branchName=main)
 
 `forkpty(3)` bindings for node.js. This allows you to fork processes with pseudoterminal file descriptors. It returns a terminal object which allows reads and writes.
