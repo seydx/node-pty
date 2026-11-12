@@ -11,7 +11,7 @@ export function assign(target: any, ...sources: any[]): any {
 
 export function loadNativeModule(name: string): {dir: string, module: any} {
   // Check build, debug, and then prebuilds.
-  const dirs = ['build/Release', 'build/Debug', `prebuilds/${process.platform}-${process.arch}`];
+  const dirs = ['build/Release', 'build/Debug', `prebuilds/${prebuildName()}`];
   // Check relative to the parent dir for unbundled and then the current dir for bundled
   const relative = ['..', '.'];
   let lastError: unknown;
@@ -26,4 +26,39 @@ export function loadNativeModule(name: string): {dir: string, module: any} {
     }
   }
   throw new Error(`Failed to load native module: ${name}.node, checked: ${dirs.join(', ')}: ${lastError}`);
+}
+
+/**
+ * The prebuild folder for this platform. musl builds of Linux (e.g. Alpine) get their own folder
+ * next to the glibc ones, the binaries are not interchangeable.
+ */
+function prebuildName(): string {
+  const name = `${process.platform}-${process.arch}`;
+  return process.platform === 'linux' && isMusl() ? `${name}-musl` : name;
+}
+
+let musl: boolean | undefined;
+
+/**
+ * Only a glibc build of Node.js carries a glibc runtime version in its diagnostic report. Network
+ * details are left out of the report, resolving open sockets can take seconds.
+ */
+function isMusl(): boolean {
+  if (musl !== undefined) {
+    return musl;
+  }
+  musl = false;
+  const report = (process as any).report;
+  if (report) {
+    const excludeNetwork = report.excludeNetwork;
+    try {
+      report.excludeNetwork = true;
+      musl = !report.getReport().header.glibcVersionRuntime;
+    } catch {
+      // No report available, assume glibc
+    } finally {
+      report.excludeNetwork = excludeNetwork;
+    }
+  }
+  return musl;
 }

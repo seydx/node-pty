@@ -14,8 +14,25 @@ const path = require('path');
  *     node scripts/prebuild.js
  */
 
+/**
+ * Same check as isMusl() in src/utils.ts: only a glibc build of Node.js reports a glibc runtime
+ * version. Network details are left out, resolving open sockets can take seconds.
+ */
+function isMusl() {
+  const report = /** @type {any} */ (process.report);
+  if (process.platform !== 'linux' || !report) {
+    return false;
+  }
+  report.excludeNetwork = true;
+  try {
+    return !report.getReport().header.glibcVersionRuntime;
+  } catch {
+    return false;
+  }
+}
+
 const PREBUILDS_ROOT = path.join(__dirname, '..', 'prebuilds');
-const PREBUILD_DIR = path.join(__dirname, '..', 'prebuilds', `${process.platform}-${process.arch}`);
+const PREBUILD_DIR = path.join(__dirname, '..', 'prebuilds', `${process.platform}-${process.arch}${isMusl() ? '-musl' : ''}`);
 
 // Do not use prebuilds when npm_config_build_from_source is set
 if (process.env.npm_config_build_from_source === 'true') {

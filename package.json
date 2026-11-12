@@ -1,16 +1,16 @@
 {
-  "name": "node-pty",
+  "name": "@seydx/node-pty",
   "description": "Fork pseudoterminals in Node.JS",
   "author": {
     "name": "Microsoft Corporation"
   },
-  "version": "1.1.0",
+  "version": "1.2.0-beta.18",
   "license": "MIT",
   "main": "./lib/index.js",
   "types": "./typings/node-pty.d.ts",
   "repository": {
     "type": "git",
-    "url": "git://github.com/microsoft/node-pty.git"
+    "url": "git+https://github.com/seydx/node-pty.git"
   },
   "files": [
     "binding.gyp",
@@ -20,12 +20,12 @@
     "scripts/prebuild.js",
     "src/**/*.{cc,h}",
     "prebuilds/",
-    "third_party/",
+    "!prebuilds/**/*.pdb",
     "typings/"
   ],
-  "homepage": "https://github.com/microsoft/node-pty",
+  "homepage": "https://github.com/seydx/node-pty",
   "bugs": {
-    "url": "https://github.com/microsoft/node-pty/issues"
+    "url": "https://github.com/seydx/node-pty/issues"
   },
   "devEngines": {
     "runtime": {
