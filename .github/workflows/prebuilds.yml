@@ -1,0 +1,218 @@
+name: Prebuilds
+
+# Builds and tests the native modules on every supported platform, collects them as
+# prebuilds/<platform>-<arch>[-musl] and publishes @seydx/node-pty with all of them inside.
+# The modules use N-API, so one build per platform serves every Node.js and Electron version.
+
+on:
+  push:
+    branches:
+      - 'release/**'
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: 'Publish @seydx/node-pty to npm'
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build ${{ matrix.prebuild }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - prebuild: darwin-arm64
+            os: macos-15
+            arch: arm64
+          - prebuild: darwin-x64
+            os: macos-15-intel
+            arch: x64
+          - prebuild: win32-x64
+            os: windows-2022
+            arch: x64
+          # Cross-compiled like upstream's own prebuilds, so it is built but not tested
+          - prebuild: win32-arm64
+            os: windows-2022
+            arch: arm64
+            cross: true
+          # glibc builds link against a glibc 2.28 sysroot, so they run on any distribution Node.js 24 supports
+          - prebuild: linux-x64
+            os: ubuntu-22.04
+            arch: x64
+            sysroot: true
+          - prebuild: linux-arm64
+            os: ubuntu-22.04-arm
+            arch: arm64
+            sysroot: true
+          # JavaScript actions don't run inside Alpine containers, so these build through docker run
+          - prebuild: linux-x64-musl
+            os: ubuntu-24.04
+            arch: x64
+            musl: true
+          - prebuild: linux-arm64-musl
+            os: ubuntu-24.04-arm
+            arch: arm64
+            musl: true
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      # npm 10 (Node.js 22) matches the upstream package-lock.json; npm 11 rejects it
+      - name: Use Node.js 22
+        if: ${{ !matrix.musl }}
+        uses: actions/setup-node@v7
+        with:
+          node-version: '22.x'
+
+      - name: Install sysroot
+        if: ${{ matrix.sysroot }}
+        run: |
+          set -eo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y gcc-10 g++-10
+          echo "CC=gcc-10" >> "$GITHUB_ENV"
+          echo "CXX=g++-10" >> "$GITHUB_ENV"
+          SYSROOT_PATH=$(node scripts/linux/install-sysroot.js ${{ matrix.arch }} | grep "SYSROOT_PATH=" | cut -d= -f2)
+          echo "SYSROOT_PATH=$SYSROOT_PATH" >> "$GITHUB_ENV"
+          echo "Sysroot path set to: $SYSROOT_PATH"
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Install dependencies and build
+        if: ${{ !matrix.musl }}
+        run: npm ci
+        env:
+          ARCH: ${{ matrix.arch }}
+          npm_config_arch: ${{ matrix.arch }}
+
+      - name: Verify GLIBC requirements
+        if: ${{ matrix.sysroot }}
+        run: |
+          EXPECTED_GLIBC_VERSION="2.28" \
+          EXPECTED_GLIBCXX_VERSION="3.4.25" \
+          SEARCH_PATH="build" \
+          ./scripts/linux/verify-glibc-requirements.sh
+
+      - name: Test
+        if: ${{ !matrix.musl && !matrix.cross }}
+        run: npm test --ignore-scripts
+
+      - name: Collect prebuild
+        if: ${{ !matrix.musl }}
+        shell: bash
+        run: |
+          mkdir -p prebuilds/${{ matrix.prebuild }}
+          cp -R build/Release/. prebuilds/${{ matrix.prebuild }}/
+          find prebuilds -name '*.pdb' -delete
+          rm -rf build
+          ls -lR prebuilds
+
+      # Loads the collected prebuild through lib/ with build/ gone, as an installed package would
+      - name: Smoke test prebuild
+        if: ${{ !matrix.musl && !matrix.cross }}
+        shell: bash
+        run: node -e "$SMOKE_TEST"
+
+      - name: Build, test and collect (Alpine)
+        if: ${{ matrix.musl }}
+        run: |
+          docker run --rm -v "$PWD:/w" -w /w -e SMOKE_TEST -e HOST_ID="$(id -u):$(id -g)" node:22-alpine sh -c '
+            apk add --no-cache build-base python3 linux-headers bash procps-ng >/dev/null &&
+            npm ci &&
+            npm test --ignore-scripts &&
+            mkdir -p prebuilds/${{ matrix.prebuild }} &&
+            cp -R build/Release/. prebuilds/${{ matrix.prebuild }}/ &&
+            rm -rf build &&
+            ls -lR prebuilds &&
+            node -e "$SMOKE_TEST"
+            status=$?
+            chown -R "$HOST_ID" /w
+            exit $status'
+
+      - name: Upload prebuild
+        uses: actions/upload-artifact@v7
+        with:
+          name: prebuild-${{ matrix.prebuild }}
+          path: prebuilds/${{ matrix.prebuild }}
+          if-no-files-found: error
+
+  publish:
+    name: Publish to npm
+    needs: build
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.publish }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Use Node.js 22
+        uses: actions/setup-node@v7
+        with:
+          node-version: '22.x'
+          registry-url: 'https://registry.npmjs.org'
+
+      - name: Install dependencies and build lib
+        run: |
+          npm ci --ignore-scripts
+          npm run build
+
+      - name: Download prebuilds
+        uses: actions/download-artifact@v8
+        with:
+          pattern: prebuild-*
+          path: artifacts
+
+      # Artifacts drop the executable bit, spawn-helper needs it back
+      - name: Assemble prebuilds
+        run: |
+          mkdir -p prebuilds
+          for dir in artifacts/prebuild-*; do
+            mv "$dir" "prebuilds/${dir#artifacts/prebuild-}"
+          done
+          chmod +x prebuilds/darwin-*/spawn-helper
+          ls -lR prebuilds
+          count=$(find prebuilds -mindepth 1 -maxdepth 1 -type d | wc -l)
+          if [ "$count" -ne 8 ]; then
+            echo "Expected 8 prebuilds, found $count"
+            exit 1
+          fi
+
+      # Trusted publishing (OIDC) needs npm 11.5.1 or newer
+      - name: Publish
+        run: |
+          npm install -g npm@11
+          npm pack --dry-run
+          VERSION=$(node -p "require('./package.json').version")
+          TAG=latest
+          if [[ "$VERSION" == *-* ]]; then
+            TAG=next
+          fi
+          npm publish --access public --tag "$TAG" --provenance --ignore-scripts
+
+env:
+  SMOKE_TEST: |
+    const pty = require('./lib/index.js');
+    const win = process.platform === 'win32';
+    const term = pty.spawn(win ? 'cmd.exe' : 'sh', win ? ['/c', 'echo prebuild-ok'] : ['-c', 'echo prebuild-ok'], {});
+    let output = '';
+    term.onData((data) => (output += data));
+    // ConPTY can deliver the last output after the exit event
+    term.onExit(({ exitCode }) => setTimeout(() => {
+      console.log(JSON.stringify(output));
+      if (!output.includes('prebuild-ok')) {
+        process.exit(1);
+      }
+      console.log('prebuild loaded, exit code', exitCode);
+    }, 500));
