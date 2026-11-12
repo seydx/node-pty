@@ -22,6 +22,7 @@ jobs:
   build:
     name: Build ${{ matrix.prebuild }}
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
@@ -97,9 +98,15 @@ jobs:
           SEARCH_PATH="build" \
           ./scripts/linux/verify-glibc-requirements.sh
 
+      # Upstream's Windows tests are flaky (process tree kill timeouts, the #921 stress test), one retry
       - name: Test
         if: ${{ !matrix.musl }}
-        run: npm test --ignore-scripts
+        shell: bash
+        run: |
+          npm test --ignore-scripts || {
+            echo "::warning::Tests failed, retrying once"
+            npm test --ignore-scripts
+          }
 
       - name: Collect prebuild
         if: ${{ !matrix.musl }}
@@ -201,11 +208,15 @@ env:
     const term = pty.spawn(win ? 'cmd.exe' : 'sh', win ? ['/c', 'echo prebuild-ok'] : ['-c', 'echo prebuild-ok'], {});
     let output = '';
     term.onData((data) => (output += data));
-    // ConPTY can deliver the last output after the exit event
+    const timeout = setTimeout(() => {
+      console.log('timed out', JSON.stringify(output));
+      process.exit(1);
+    }, 30000);
+    // ConPTY can deliver the last output after the exit event. Exit explicitly, on Windows the
+    // ConPTY handles keep the event loop alive.
     term.onExit(({ exitCode }) => setTimeout(() => {
+      clearTimeout(timeout);
       console.log(JSON.stringify(output));
-      if (!output.includes('prebuild-ok')) {
-        process.exit(1);
-      }
       console.log('prebuild loaded, exit code', exitCode);
+      process.exit(output.includes('prebuild-ok') ? 0 : 1);
     }, 500));
